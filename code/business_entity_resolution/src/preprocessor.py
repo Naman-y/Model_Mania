@@ -172,8 +172,8 @@ def extract_city_state(address: Optional[str]) -> Tuple[Optional[str], Optional[
     if not candidate_city or not candidate_state:
         return (None, None)
         
-    # Rule 3: Neither is a substring of the other
-    if candidate_city in candidate_state or candidate_state in candidate_city:
+    # Rule 3: Reject only if identical or same token set (e.g. repeated state: "Tamil Nadu, Tamil Nadu")
+    if candidate_city == candidate_state or set(candidate_city.split()) == set(candidate_state.split()):
         return (None, None)
         
     return (candidate_city, candidate_state)
