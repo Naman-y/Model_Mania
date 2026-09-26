@@ -43,9 +43,13 @@ def package_submission(team_name: str, base_dir: str = "."):
         
         # 3. Code folder
         for root, dirs, files in os.walk(code_dir):
+            if "__pycache__" in root:
+                continue
             for f in files:
+                if f.endswith((".pyc", ".pyo")):
+                    continue
                 full_p = os.path.join(root, f)
-                rel_p = os.path.relpath(full_p, base_dir)
+                rel_p = os.path.relpath(full_p, base_dir).replace("\\", "/")
                 zf.write(full_p, arcname=rel_p)
                 
     print(f"Submission zip successfully created at: {zip_name} ({os.path.getsize(zip_name):,} bytes)")
