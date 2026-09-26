@@ -87,25 +87,29 @@ def load_ground_truth(gt_path: str) -> Dict[str, Set[str]]:
             gt_map[s1] = set()
     return gt_map
 
-def write_candidate_pairs(candidates_dict: Dict[str, List[str]], out_path: str):
-    """Writes candidate_pairs.tsv matching competition format."""
+def write_candidate_pairs(candidates_dict: Dict[str, List[str]], out_path: str, ordered_s1_ids: Optional[List[str]] = None):
+    """Writes candidate_pairs.tsv preserving exact input S1 row order."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    keys = ordered_s1_ids if ordered_s1_ids is not None else list(candidates_dict.keys())
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write("source1_entity_id\tcandidate_entity_ids\n")
-        for s1_id, cands in candidates_dict.items():
+        for s1_id in keys:
+            cands = candidates_dict.get(s1_id, [])
             cand_str = ",".join(cands) if cands else ""
             f.write(f"{s1_id}\t{cand_str}\n")
-    print(f"Saved candidate pairs: {out_path} ({len(candidates_dict):,} rows)")
+    print(f"Saved candidate pairs: {out_path} ({len(keys):,} rows)")
 
-def write_matching_results(predictions_dict: Dict[str, List[str]], out_path: str):
-    """Writes matching_results.tsv matching competition format."""
+def write_matching_results(predictions_dict: Dict[str, List[str]], out_path: str, ordered_s1_ids: Optional[List[str]] = None):
+    """Writes matching_results.tsv preserving exact input S1 row order."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    keys = ordered_s1_ids if ordered_s1_ids is not None else list(predictions_dict.keys())
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write("source1_entity_id\tmatched_entity_ids\n")
-        for s1_id, matches in predictions_dict.items():
+        for s1_id in keys:
+            matches = predictions_dict.get(s1_id, [])
             match_str = ",".join(matches) if matches else ""
             f.write(f"{s1_id}\t{match_str}\n")
-    print(f"Saved matching results: {out_path} ({len(predictions_dict):,} rows)")
+    print(f"Saved matching results: {out_path} ({len(keys):,} rows)")
 
 def run_test_mode(args):
     """Full-scale test mode for leaderboard generation."""
@@ -240,11 +244,12 @@ def run_test_mode(args):
             if p >= threshold:
                 test_matches_dict[sid].append(cid)
                 
-    # 4. Save Outputs
+    # 4. Save Outputs in exact test_source1.tsv row order
     cand_file = os.path.join(args.out_dir, "candidate_pairs.tsv")
     match_file = os.path.join(args.out_dir, "matching_results.tsv")
-    write_candidate_pairs(test_candidates_dict, cand_file)
-    write_matching_results(test_matches_dict, match_file)
+    ordered_s1_ids = s1_test['entity_id'].to_list()
+    write_candidate_pairs(test_candidates_dict, cand_file, ordered_s1_ids=ordered_s1_ids)
+    write_matching_results(test_matches_dict, match_file, ordered_s1_ids=ordered_s1_ids)
     print("Test pipeline completed successfully!")
 
 def main():
