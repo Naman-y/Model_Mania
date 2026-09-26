@@ -6,6 +6,7 @@ dataset/
 Amazon_ML_Hackathon_Problem_Statement.pdf
 Entity_Resolution_Implementation_Plan*.md
 *Implementation_Plan*.md
+kaggle_deploy/
 
 # Python & Environment
 __pycache__/
