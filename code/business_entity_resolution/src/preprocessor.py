@@ -12,11 +12,13 @@ except ImportError:
 LEGAL_SUFFIXES = {
     'corporation', 'corp', 'incorporated', 'inc', 'limited', 'ltd',
     'private limited', 'pvt ltd', 'pvt', 'private', 'llc', 'llp',
-    'co', 'company', 'gmbh', 'sa', 'sarl', 'plc'
+    'co', 'company', 'gmbh', 'sa', 'sarl', 'plc',
+    'enterprise', 'enterprises'
 }
 
 # Regex patterns
 RE_NON_ALPHANUM = re.compile(r'[^a-zA-Z0-9\s]')
+RE_STRIP_ALL = re.compile(r'[^a-zA-Z0-9]')
 RE_MULTIPLE_SPACES = re.compile(r'\s+')
 RE_AMPERSAND = re.compile(r'\s*&\s*')
 
@@ -48,7 +50,7 @@ def canonicalize_country(country_str: Optional[str]) -> str:
     if not country_str or not isinstance(country_str, str):
         return "UNKNOWN"
     c = country_str.strip().lower()
-    c = RE_NON_ALPHANUM.sub('', c)
+    c = RE_STRIP_ALL.sub('', c)
     if c in {'us', 'usa', 'unitedstates', 'unitedstatesofamerica'}:
         return "US"
     if c in {'india', 'ind', 'in'}:
