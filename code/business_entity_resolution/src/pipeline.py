@@ -172,6 +172,12 @@ def run_test_mode(args):
     clf = EntityMatchClassifier(n_estimators=250, learning_rate=0.06)
     clf.fit(X_train, y_train)
     
+    # Save the trained model to disk for future benchmarking / reuse
+    import joblib
+    model_path = os.path.join(args.out_dir, "entity_match_model.joblib")
+    joblib.dump(clf, model_path)
+    print(f"Model saved to {model_path}")
+    
     # Free memory
     del s1_train, s2_train, s3_train, cand_train_df, cand_dict_train, X_train, y_train
     
