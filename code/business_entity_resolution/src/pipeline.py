@@ -154,8 +154,10 @@ def run_test_mode(args):
                 )
                 X_train.append(feat)
                 y_train.append(1)
-        for cid in candidates:
-            if cid not in true_matches and cid in cand_dict_train:
+        false_cands = [c for c in candidates if c not in true_matches and c in cand_dict_train]
+        if false_cands:
+            cand_neg_feats = []
+            for cid in false_cands:
                 cand = cand_dict_train[cid]
                 feat = compute_pairwise_features(
                     s1['stripped_name'], s1['metaphone'], s1['clean_addr'],
@@ -163,6 +165,10 @@ def run_test_mode(args):
                     cid, cand['stripped_name'], cand['metaphone'], cand['clean_addr'],
                     cand['pin'], cand['city'], cand['state']
                 )
+                hard_score = feat[0] * 0.4 + feat[1] * 0.3 + feat[4] * 0.3
+                cand_neg_feats.append((hard_score, feat))
+            cand_neg_feats.sort(key=lambda x: x[0], reverse=True)
+            for _, feat in cand_neg_feats[:4]:
                 X_train.append(feat)
                 y_train.append(0)
                 
