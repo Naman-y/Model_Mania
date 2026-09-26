@@ -270,7 +270,20 @@ def main():
         s2_df = load_and_preprocess_records(os.path.join(args.data_dir, "train/train_source2.tsv"), max_rows=args.max_cand_sample)
         s3_df = load_and_preprocess_records(os.path.join(args.data_dir, "train/train_source3.tsv"), max_rows=args.max_cand_sample)
         
-        gt_map = load_ground_truth(os.path.join(args.data_dir, "train/train_ground_truth.tsv"))
+        # Load ground truth and filter by S1 IDs present in sample
+        gt_raw = pl.read_csv(os.path.join(args.data_dir, "train/train_ground_truth.tsv"), separator='\t')
+        s1_all_ids = set(s1_df['entity_id'].to_list())
+        gt_filtered = gt_raw.filter(pl.col('source1_entity_id').is_in(list(s1_all_ids)))
+        
+        gt_map: Dict[str, Set[str]] = {}
+        for s1, m_str in zip(gt_filtered['source1_entity_id'].to_list(), gt_filtered['matched_entity_ids'].to_list()):
+            if m_str and isinstance(m_str, str) and m_str.strip():
+                gt_map[s1] = set(x.strip() for x in m_str.split(',') if x.strip())
+            else:
+                gt_map[s1] = set()
+        for s1 in s1_all_ids:
+            if s1 not in gt_map:
+                gt_map[s1] = set()
         
         s1_train = s1_df.slice(0, args.train_sample)
         s1_val = s1_df.slice(args.train_sample, args.val_sample)
