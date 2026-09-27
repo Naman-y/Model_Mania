@@ -6,3 +6,6 @@ scikit-learn>=1.2.0
 numpy>=1.22.0
 scipy>=1.10.0
 tqdm>=4.65.0
+faiss-cpu>=1.7.4
+sentence-transformers>=2.2.0
+joblib>=1.3.0
