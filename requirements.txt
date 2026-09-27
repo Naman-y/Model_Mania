@@ -1,0 +1,10 @@
+jellyfish
+lightgbm
+polars
+tqdm
+numpy
+pandas
+scikit-learn
+sentence-transformers
+faiss-cpu
+joblib
