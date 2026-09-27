@@ -1,0 +1,14 @@
+{
+  "id": "golok7/amazon-ml-entity-resolution",
+  "title": "Amazon ML Entity Resolution",
+  "code_file": "amazon-ml-entity-resolution.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": []
+}

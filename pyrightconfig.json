@@ -1,0 +1,10 @@
+{
+  "include": ["."],
+  "extraPaths": [
+    "code/business_entity_resolution/src"
+  ],
+  "pythonVersion": "3.10",
+  "reportMissingModuleSource": "none",
+  "reportMissingImports": "warning",
+  "typeCheckingMode": "basic"
+}

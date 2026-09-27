@@ -1,0 +1,16 @@
+{
+  "id": "golok7/amazon-ml-entity-resolution",
+  "title": "amazon-ml-entity-resolution",
+  "code_file": "run_full_training_and_eval.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": [
+    "satwiksps/amazon-ml-challenge-2026"
+  ],
+  "competition_sources": [],
+  "kernel_sources": []
+}

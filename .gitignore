@@ -9,8 +9,11 @@ dataset/
 Entity_Resolution_Implementation_Plan*.md
 *Implementation_Plan*.md
 
-# ---------- Kaggle Deploy (internal runner, not for repo) ----------
-kaggle_deploy/
+# ---------- Kaggle Deploy (tracked - contains deployment scripts) --
+# kaggle_deploy/  <-- unignored: push scripts are version controlled
+!kaggle_deploy/**
+kaggle_deploy/__pycache__/
+kaggle_deploy/**/*.joblib
 
 # ---------- Generated Outputs (too large for git) ------------------
 output/
@@ -34,7 +37,7 @@ checkpoints/
 *.tar.gz
 
 # ---------- Scratch / Local Dev Scripts ----------------------------
-full_training_benchmark.py
+# full_training_benchmark.py  <-- unignored: main training entry point
 scratch/
 
 # ---------- Python Bytecode & Caches --------------------------------
