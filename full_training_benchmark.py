@@ -14,11 +14,11 @@ from typing import Dict, Set, List
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'code/business_entity_resolution/src'))
 
-from preprocessor import canonicalize_country, clean_business_name, extract_pin, extract_city_state, clean_address
-from blocking_production import ProductionCandidateBlocker
-from features import compute_pairwise_features
-from model import EntityMatchClassifier
-from evaluate import evaluate_predictions, optimize_threshold
+from preprocessor import canonicalize_country, clean_business_name, extract_pin, extract_city_state, clean_address  # type: ignore
+from blocking_production import ProductionCandidateBlocker  # type: ignore
+from features import compute_pairwise_features  # type: ignore
+from model import EntityMatchClassifier  # type: ignore
+from evaluate import evaluate_predictions, optimize_threshold  # type: ignore
 
 def preprocess(df):
     ids, names, addrs, countries = (

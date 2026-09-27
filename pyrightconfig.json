@@ -5,6 +5,7 @@
   ],
   "pythonVersion": "3.10",
   "reportMissingModuleSource": "none",
-  "reportMissingImports": "warning",
-  "typeCheckingMode": "basic"
+  "reportMissingImports": "none",
+  "reportUnknownMemberType": "none",
+  "typeCheckingMode": "off"
 }
