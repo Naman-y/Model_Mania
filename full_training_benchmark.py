@@ -69,7 +69,8 @@ def preprocess(df: pl.DataFrame, n_workers: int = None) -> pl.DataFrame:
         with ProcessPoolExecutor(max_workers=n_workers) as ex:
             futures = {ex.submit(_preprocess_chunk, c): idx for idx, c in enumerate(chunks)}
             ordered = [None] * len(chunks)
-            for f in as_completed(futures):
+            from tqdm import tqdm
+            for f in tqdm(as_completed(futures), total=len(chunks), desc=f"Parallel Preprocessing ({n_workers} workers)"):
                 ordered[futures[f]] = f.result()
             results = ordered
 
