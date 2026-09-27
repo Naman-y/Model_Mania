@@ -59,16 +59,30 @@ def canonicalize_country(country_str: Optional[str]) -> str:
         return "France"
     return country_str.strip().title()
 
+import re
+
+# Fast detector: matches any char in actual non-Latin Unicode script blocks
+# (Devanagari U+0900-U+097F, Bengali, Tamil, Telugu, Arabic, CJK, etc.)
+# Does NOT trigger for Latin-with-diacritics (é, ñ, ü) — those are fine as-is
+_RE_NON_LATIN_SCRIPT = re.compile(
+    r'[\u0900-\u0D7F'   # Indic (Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam)
+    r'\u0E00-\u0E7F'    # Thai
+    r'\u0600-\u06FF'    # Arabic
+    r'\u0400-\u04FF'    # Cyrillic
+    r'\u4E00-\u9FFF'    # CJK Unified Ideographs
+    r'\uAC00-\uD7AF'    # Korean Hangul
+    r'\u3040-\u30FF]'   # Japanese Hiragana/Katakana
+)
+
 def transliterate_to_latin(text: str) -> str:
-    """Convert native script text (Devanagari, Tamil, Telugu, etc.) to Latin using Aksharamukha."""
+    """Convert native-script text to Latin. Only calls aksharamukha when truly needed."""
     if not text:
         return ""
-    # Quick check if non-ASCII characters exist
-    if all(ord(ch) < 128 for ch in text):
-        return text
+    # Fast O(1)-ish regex check — only call aksharamukha for real non-Latin scripts
+    if not _RE_NON_LATIN_SCRIPT.search(text):
+        return text   # ASCII or Latin-with-diacritics — skip transliteration entirely
     if HAS_AKSHARAMUKHA:
         try:
-            # Aksharamukha autodetects the source script when given 'autodetect'
             return transliterate.process('autodetect', 'RomanReadable', text)
         except Exception:
             try:
@@ -76,6 +90,7 @@ def transliterate_to_latin(text: str) -> str:
             except Exception:
                 return text
     return text
+
 
 # Web domain prefixes and suffixes
 RE_WEB_PREFIX = re.compile(r'^(https?://)?(www\d?\.)?', re.IGNORECASE)

@@ -20,11 +20,17 @@ from features import compute_pairwise_features  # type: ignore
 from model import EntityMatchClassifier  # type: ignore
 from evaluate import evaluate_predictions, optimize_threshold  # type: ignore
 
-def preprocess(df):
-    ids, names, addrs, countries = (
-        df['entity_id'].to_list(), df['business_name'].to_list(),
-        df['business_address'].to_list(), df['country'].to_list()
-    )
+import gc
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+def _preprocess_chunk(args):
+    """Process a chunk of rows — runs in a separate process."""
+    ids, names, addrs, countries = args
+    # Import inside the worker so it works with spawn/fork
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'code/business_entity_resolution/src'))
+    from preprocessor import canonicalize_country, clean_business_name, extract_pin, extract_city_state, clean_address  # type: ignore
     c_names, s_names, metas, ctrs, pins, cities, states, c_addrs = [], [], [], [], [], [], [], []
     for name, addr, c in zip(names, addrs, countries):
         cc = canonicalize_country(c)
@@ -33,12 +39,54 @@ def preprocess(df):
         city, state = extract_city_state(addr)
         ca = clean_address(addr)
         c_names.append(cn); s_names.append(sn); metas.append(meta)
-        ctrs.append(cc); pins.append(pin); cities.append(city); states.append(state); c_addrs.append(ca)
+        ctrs.append(cc); pins.append(pin); cities.append(city)
+        states.append(state); c_addrs.append(ca)
+    return ids, ctrs, c_names, s_names, metas, pins, cities, states, c_addrs
+
+def preprocess(df: pl.DataFrame, n_workers: int = None) -> pl.DataFrame:
+    """Parallel preprocessing — splits across all CPU cores."""
+    if n_workers is None:
+        n_workers = min(mp.cpu_count(), 8)  # cap at 8 to avoid memory OOM
+
+    ids     = df['entity_id'].to_list()
+    names   = df['business_name'].to_list()
+    addrs   = df['business_address'].to_list()
+    ctrys   = df['country'].to_list()
+    n       = len(ids)
+
+    # For small datasets don't bother spawning processes
+    if n < 50_000 or n_workers == 1:
+        chunk_args = [(ids, names, addrs, ctrys)]
+        results = [_preprocess_chunk(chunk_args[0])]
+    else:
+        chunk_size = (n + n_workers - 1) // n_workers
+        chunks = [
+            (ids[i:i+chunk_size], names[i:i+chunk_size],
+             addrs[i:i+chunk_size], ctrys[i:i+chunk_size])
+            for i in range(0, n, chunk_size)
+        ]
+        results = []
+        with ProcessPoolExecutor(max_workers=n_workers) as ex:
+            futures = {ex.submit(_preprocess_chunk, c): idx for idx, c in enumerate(chunks)}
+            ordered = [None] * len(chunks)
+            for f in as_completed(futures):
+                ordered[futures[f]] = f.result()
+            results = ordered
+
+    # Merge all chunk results in order
+    all_ids, all_ctrs, all_cn, all_sn, all_meta = [], [], [], [], []
+    all_pin, all_city, all_state, all_addr = [], [], [], []
+    for r in results:
+        all_ids.extend(r[0]); all_ctrs.extend(r[1]); all_cn.extend(r[2])
+        all_sn.extend(r[3]);  all_meta.extend(r[4]); all_pin.extend(r[5])
+        all_city.extend(r[6]); all_state.extend(r[7]); all_addr.extend(r[8])
+
     return pl.DataFrame({
-        'entity_id': ids, 'country': ctrs, 'cleaned_name': c_names,
-        'stripped_name': s_names, 'metaphone': metas, 'pin': pins,
-        'city': cities, 'state': states, 'clean_addr': c_addrs
+        'entity_id': all_ids, 'country': all_ctrs, 'cleaned_name': all_cn,
+        'stripped_name': all_sn, 'metaphone': all_meta, 'pin': all_pin,
+        'city': all_city, 'state': all_state, 'clean_addr': all_addr
     })
+
 
 t0 = time.time()
 data_dir = 'student_resource/dataset/train'
