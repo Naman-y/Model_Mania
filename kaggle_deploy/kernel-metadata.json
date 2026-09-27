@@ -1,7 +1,7 @@
 {
   "id": "golok7/amazon-ml-entity-resolution",
   "title": "amazon-ml-entity-resolution",
-  "code_file": "run_full_training_and_eval.py",
+  "code_file": "solution_bundled.py",
   "language": "python",
   "kernel_type": "script",
   "is_private": "true",

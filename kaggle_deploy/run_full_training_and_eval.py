@@ -10,11 +10,9 @@ import gc
 import time
 import subprocess
 
-# If on Kaggle, clone the repo to get the latest src/ modules
+# If on Kaggle, the src files will be uploaded alongside the script
 if os.path.exists("/kaggle/working"):
-    print("Cloning GitHub repository to get the latest source code...")
-    subprocess.run("rm -rf /kaggle/working/Model_Mania", shell=True)
-    subprocess.run("git clone https://github.com/Naman-y/Model_Mania.git /kaggle/working/Model_Mania", shell=True)
+    print("Running on Kaggle, using uploaded source files...")
 
 import numpy as np
 import polars as pl
@@ -54,17 +52,16 @@ def find_src_dir() -> str:
 SRC_DIR = find_src_dir()
 sys.path.append(SRC_DIR)
 
-from preprocessor import canonicalize_country, clean_business_name, extract_pin, extract_city_state, clean_address
-from blocking_production import ProductionCandidateBlocker
-from features import compute_pairwise_features
-from evaluate import evaluate_predictions, optimize_threshold
+from preprocessor import canonicalize_country, clean_business_name, extract_pin, extract_city_state, clean_address  # type: ignore
+from blocking_production import ProductionCandidateBlocker  # type: ignore
+from features import compute_pairwise_features  # type: ignore
+from evaluate import evaluate_predictions, optimize_threshold  # type: ignore
 
-def preprocess_df(df: pl.DataFrame) -> pl.DataFrame:
-    ids = df['entity_id'].to_list()
-    names = df['business_name'].to_list()
-    addrs = df['business_address'].to_list()
-    countries = df['country'].to_list()
-    
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+def _preprocess_chunk(args):
+    ids, names, addrs, countries = args
     c_names, s_names, metas, ctrs, pins, cities, states, c_addrs = [], [], [], [], [], [], [], []
     for name, addr, c in zip(names, addrs, countries):
         cc = canonicalize_country(c)
@@ -72,14 +69,43 @@ def preprocess_df(df: pl.DataFrame) -> pl.DataFrame:
         pin = extract_pin(addr, cc)
         city, state = extract_city_state(addr)
         ca = clean_address(addr)
-        
         c_names.append(cn); s_names.append(sn); metas.append(meta)
-        ctrs.append(cc); pins.append(pin); cities.append(city); states.append(state); c_addrs.append(ca)
-        
+        ctrs.append(cc); pins.append(pin); cities.append(city)
+        states.append(state); c_addrs.append(ca)
+    return ids, ctrs, c_names, s_names, metas, pins, cities, states, c_addrs
+
+def preprocess_df(df: pl.DataFrame, n_workers: int = None) -> pl.DataFrame:
+    if n_workers is None:
+        n_workers = min(mp.cpu_count(), 4)
+    ids = df['entity_id'].to_list()
+    names = df['business_name'].to_list()
+    addrs = df['business_address'].to_list()
+    ctrys = df['country'].to_list()
+    n = len(ids)
+
+    if n < 50_000 or n_workers == 1:
+        results = [_preprocess_chunk((ids, names, addrs, ctrys))]
+    else:
+        chunk_size = (n + n_workers - 1) // n_workers
+        chunks = [(ids[i:i+chunk_size], names[i:i+chunk_size], addrs[i:i+chunk_size], ctrys[i:i+chunk_size]) for i in range(0, n, chunk_size)]
+        with ProcessPoolExecutor(max_workers=n_workers) as ex:
+            futures = {ex.submit(_preprocess_chunk, c): idx for idx, c in enumerate(chunks)}
+            ordered = [None] * len(chunks)
+            for f in as_completed(futures):
+                ordered[futures[f]] = f.result()
+            results = ordered
+
+    all_ids, all_ctrs, all_cn, all_sn, all_meta = [], [], [], [], []
+    all_pin, all_city, all_state, all_addr = [], [], [], []
+    for r in results:
+        all_ids.extend(r[0]); all_ctrs.extend(r[1]); all_cn.extend(r[2])
+        all_sn.extend(r[3]);  all_meta.extend(r[4]); all_pin.extend(r[5])
+        all_city.extend(r[6]); all_state.extend(r[7]); all_addr.extend(r[8])
+
     return pl.DataFrame({
-        'entity_id': ids, 'country': ctrs, 'cleaned_name': c_names,
-        'stripped_name': s_names, 'metaphone': metas, 'pin': pins,
-        'city': cities, 'state': states, 'clean_addr': c_addrs
+        'entity_id': all_ids, 'country': all_ctrs, 'cleaned_name': all_cn,
+        'stripped_name': all_sn, 'metaphone': all_meta, 'pin': all_pin,
+        'city': all_city, 'state': all_state, 'clean_addr': all_addr
     })
 
 def main():
