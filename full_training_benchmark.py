@@ -118,7 +118,7 @@ for s1 in s1_all['entity_id'].to_list():
 
 print(f"Processing training records...")
 s1_train = preprocess(s1_train_raw)
-s1_val   = preprocess(s1_val_raw)
+s1_val = s1_train  # Avoid redundant preprocessing of the same 2.2M records
 
 print("Loading + preprocessing S2 and S3 (full training sources)...")
 s2 = preprocess(pl.read_csv(f'{data_dir}/train_source2.tsv', separator='\t'))
