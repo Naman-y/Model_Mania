@@ -160,7 +160,17 @@ class FAISSIndexManager:
     def save_index(self, index: faiss.Index, country: str):
         """Persist FAISS index to disk."""
         path = os.path.join(self.index_dir, f"{country}.faiss")
-        faiss.write_index(index, path)
+        try:
+            # GPU indices cannot be serialized directly
+            if hasattr(faiss, 'index_gpu_to_cpu') and hasattr(index, 'd') and not hasattr(index, 'metric_type'): 
+                # Very hacky check if it's a gpu index but faiss.index_gpu_to_cpu is the safest way
+                index_to_save = faiss.index_gpu_to_cpu(index) if self.use_gpu else index
+            else:
+                index_to_save = faiss.index_gpu_to_cpu(index) if self.use_gpu else index
+        except Exception:
+            index_to_save = index # fallback
+            
+        faiss.write_index(index_to_save, path)
         logger.info(f"Saved FAISS index to {path}")
     
     def load_index(self, country: str) -> Optional[faiss.Index]:
