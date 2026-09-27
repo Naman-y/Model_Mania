@@ -125,7 +125,7 @@ def main():
     
     # 4. Build Blocker on candidate pool
     print("Building multi-index candidate blocker...")
-    blocker = CandidateBlocker(max_candidates_per_entity=30)
+    blocker = CandidateBlocker(max_candidates_per_entity=30, use_faiss=False)
     blocker.index_candidates(
         cand_df['entity_id'].to_list(),
         cand_df['country'].to_list(),

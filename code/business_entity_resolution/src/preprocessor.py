@@ -77,6 +77,11 @@ def transliterate_to_latin(text: str) -> str:
                 return text
     return text
 
+# Web domain prefixes and suffixes
+RE_WEB_PREFIX = re.compile(r'^(https?://)?(www\d?\.)?', re.IGNORECASE)
+RE_TLD_SUFFIX = re.compile(r'\.(com|org|net|in|co|io|biz|info|us|gov|edu|ai|me|online|store|tech)(\.[a-z]{2})?$', re.IGNORECASE)
+RE_CAMEL_CASE = re.compile(r'([a-z])([A-Z])')
+
 def clean_business_name(name: Optional[str]) -> Tuple[str, str, str]:
     """
     Cleans business name:
@@ -89,7 +94,13 @@ def clean_business_name(name: Optional[str]) -> Tuple[str, str, str]:
     text = transliterate_to_latin(name)
     
     # 2. Lowercase and replace & with and
-    text = text.lower()
+    text = text.lower().strip()
+    
+    # Strip web prefixes and domain suffixes (e.g. www.sweetdeli.com -> sweetdeli)
+    text = RE_WEB_PREFIX.sub('', text)
+    text = RE_TLD_SUFFIX.sub('', text)
+    text = RE_CAMEL_CASE.sub(r'\1 \2', text)
+    
     text = RE_AMPERSAND.sub(' and ', text)
     
     # 3. Strip punctuation
@@ -97,7 +108,7 @@ def clean_business_name(name: Optional[str]) -> Tuple[str, str, str]:
     tokens = [t for t in RE_MULTIPLE_SPACES.sub(' ', text).strip().split() if t]
     cleaned_name = " ".join(tokens)
     
-    # 4. Strip legal suffixes
+    # 4. Strip legal suffixes and web terms
     filtered_tokens = []
     # Check multi-word suffixes first
     joined = " " + cleaned_name + " "
@@ -106,8 +117,9 @@ def clean_business_name(name: Optional[str]) -> Tuple[str, str, str]:
             joined = joined[:-len(suffix)-2]
     
     tokens = joined.strip().split()
+    WEB_STOPWORDS = {'com', 'org', 'net', 'www', 'http', 'https', 'co'}
     for tok in tokens:
-        if tok not in LEGAL_SUFFIXES:
+        if tok not in LEGAL_SUFFIXES and tok not in WEB_STOPWORDS:
             filtered_tokens.append(tok)
             
     stripped_name = " ".join(filtered_tokens) if filtered_tokens else cleaned_name

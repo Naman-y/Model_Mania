@@ -16,6 +16,15 @@ def jaccard_similarity(tokens_a: set, tokens_b: set) -> float:
     union = len(tokens_a.union(tokens_b))
     return float(intersection) / float(union) if union > 0 else 0.0
 
+import re
+RE_NUMBERS = re.compile(r'\b\d+\b')
+
+def extract_primary_numbers(addr: str) -> List[str]:
+    """Extract street/building/unit numbers from address string."""
+    if not addr:
+        return []
+    return RE_NUMBERS.findall(addr)
+
 def compute_pairwise_features(
     s1_stripped_name: str,
     s1_metaphone: str,
@@ -32,7 +41,7 @@ def compute_pairwise_features(
     cand_state: Optional[str]
 ) -> List[float]:
     """
-    Computes a 9-dimensional numeric feature vector for an (S1, candidate) pair.
+    Computes a 12-dimensional numeric feature vector for an (S1, candidate) pair.
     """
     # 1. Name Levenshtein normalized similarity
     len_a = len(s1_stripped_name)
@@ -49,7 +58,13 @@ def compute_pairwise_features(
     # 3. Name length ratio
     name_len_ratio = min(len_a, len_b) / max_len
     
-    # 4. Metaphone key similarity
+    # 4. Jaro-Winkler similarity
+    name_jw = jellyfish.jaro_winkler_similarity(s1_stripped_name, cand_stripped_name)
+    
+    # 5. Exact stripped name match
+    exact_name = 1.0 if s1_stripped_name == cand_stripped_name and s1_stripped_name else 0.0
+    
+    # 6. Metaphone key similarity
     s1_meta_first = s1_metaphone.split()[0] if s1_metaphone else ""
     cand_meta_first = cand_metaphone.split()[0] if cand_metaphone else ""
     if s1_meta_first and cand_meta_first:
@@ -62,12 +77,25 @@ def compute_pairwise_features(
     else:
         meta_sim = 0.0
         
-    # 5. Address token Jaccard
+    # 7. Address token Jaccard
     s1_addr_tokens = set(s1_clean_address.split())
     cand_addr_tokens = set(cand_clean_address.split())
     addr_jaccard = jaccard_similarity(s1_addr_tokens, cand_addr_tokens)
     
-    # 6. PIN agreement
+    # 8. Building / Street number agreement (eliminates near-neighbor false positives)
+    s1_nums = extract_primary_numbers(s1_clean_address)
+    cand_nums = extract_primary_numbers(cand_clean_address)
+    if s1_nums and cand_nums:
+        if s1_nums[0] == cand_nums[0]:
+            num_agreement = 1.0
+        elif set(s1_nums) & set(cand_nums):
+            num_agreement = 0.5
+        else:
+            num_agreement = -1.0
+    else:
+        num_agreement = 0.0
+    
+    # 9. PIN agreement
     # 1.0 = match, 0.5 = 3-digit prefix match, -1.0 = clash, 0.0 = missing
     if s1_pin and cand_pin:
         if s1_pin == cand_pin:
@@ -79,7 +107,7 @@ def compute_pairwise_features(
     else:
         pin_score = 0.0
         
-    # 7. City agreement
+    # 10. City agreement
     if s1_city and cand_city:
         if s1_city == cand_city or s1_city in cand_city or cand_city in s1_city:
             city_score = 1.0
@@ -88,7 +116,7 @@ def compute_pairwise_features(
     else:
         city_score = 0.0
         
-    # 8. State agreement
+    # 11. State agreement
     if s1_state and cand_state:
         if s1_state == cand_state or s1_state in cand_state or cand_state in s1_state:
             state_score = 1.0
@@ -97,15 +125,18 @@ def compute_pairwise_features(
     else:
         state_score = 0.0
         
-    # 9. Source indicator (S2 vs S3)
+    # 12. Source indicator (S2 vs S3)
     is_s2 = 1.0 if cand_id.startswith("S2-") else 0.0
     
     return [
         name_lev_sim,
         name_jaccard,
         name_len_ratio,
+        name_jw,
+        exact_name,
         meta_sim,
         addr_jaccard,
+        num_agreement,
         pin_score,
         city_score,
         state_score,
@@ -116,8 +147,11 @@ FEATURE_NAMES = [
     'name_lev_sim',
     'name_jaccard',
     'name_len_ratio',
+    'name_jw',
+    'exact_name',
     'meta_sim',
     'addr_jaccard',
+    'num_agreement',
     'pin_score',
     'city_score',
     'state_score',
