@@ -184,3 +184,58 @@ print(f"Macro Precision    : {final['macro_precision']:.4f}")
 print(f"Macro Recall       : {final['macro_recall']:.4f}")
 print(f"Blocking Recall    : {recall_ceiling:.2f}%")
 print(f"Time elapsed       : {time.time()-t0:.1f}s")
+
+# === SAVE OUTPUTS FOR ERROR AUDIT ===
+print("\nSaving candidate pairs and predictions for error audit...")
+os.makedirs('output', exist_ok=True)
+cand_out_path  = 'output/candidate_pairs_train.tsv'
+match_out_path = 'output/matching_results_train.tsv'
+
+# Re-run full-set inference to produce audit TSVs
+print("Running full-set inference for audit TSVs (all 2.2M S1)...")
+all_s1_ids_out: List[str] = []
+all_cids_out: List[str] = []
+all_feat_list_out = []
+all_cands_by_s1: Dict[str, List[str]] = {}
+
+for s1 in tqdm(s1_train.iter_rows(named=True), total=len(s1_train), desc="Audit Inference"):
+    s1_id = s1['entity_id']
+    candidates = blocker.find_candidates_for_entity(
+        s1['country'], s1['stripped_name'], s1['pin'], s1['metaphone']
+    )
+    all_cands_by_s1[s1_id] = list(candidates)
+    for cid in candidates:
+        if cid in cand_dict:
+            cand = cand_dict[cid]
+            feat = compute_pairwise_features(
+                s1['stripped_name'], s1['metaphone'], s1['clean_addr'],
+                s1['pin'], s1['city'], s1['state'],
+                cid, cand['stripped_name'], cand['metaphone'], cand['clean_addr'],
+                cand['pin'], cand['city'], cand['state']
+            )
+            all_s1_ids_out.append(s1_id)
+            all_cids_out.append(cid)
+            all_feat_list_out.append(feat)
+
+all_probs_out = clf.predict_proba(np.array(all_feat_list_out)) if all_feat_list_out else np.array([])
+
+# Write candidate pairs TSV
+with open(cand_out_path, 'w', encoding='utf-8') as f:
+    f.write("source1_entity_id\tcandidate_entity_ids\n")
+    for s1_id, cands in all_cands_by_s1.items():
+        f.write(f"{s1_id}\t{','.join(cands)}\n")
+print(f"Saved: {cand_out_path}")
+
+# Write matched predictions TSV at best threshold
+matches_out: Dict[str, List[str]] = {sid: [] for sid in all_cands_by_s1}
+for sid, cid, prob in zip(all_s1_ids_out, all_cids_out, all_probs_out):
+    if prob >= best_thresh:
+        matches_out[sid].append(cid)
+
+with open(match_out_path, 'w', encoding='utf-8') as f:
+    f.write("source1_entity_id\tmatched_entity_ids\n")
+    for sid, matched in matches_out.items():
+        f.write(f"{sid}\t{','.join(matched)}\n")
+print(f"Saved: {match_out_path}")
+print("\n=== READY FOR ERROR AUDIT ===")
+print("Run: python code/business_entity_resolution/src/pipeline_error_audit.py")
