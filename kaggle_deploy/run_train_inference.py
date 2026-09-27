@@ -8,9 +8,11 @@ import numpy as np
 import polars as pl
 import joblib
 from tqdm import tqdm
-import re, unicodedata, subprocess
+import re, unicodedata
 from collections import defaultdict
 import jellyfish
+from sklearn.isotonic import IsotonicRegression
+from sklearn.metrics import precision_recall_curve
 
 # --- Utility functions (same as solution.py) ---
 LEGAL_SUFFIXES = {
@@ -241,6 +243,25 @@ def find_dataset_dir() -> str:
             return c
     raise FileNotFoundError("Dataset root not found")
 
+def find_optimal_threshold_f05(probs: np.ndarray, labels: np.ndarray) -> float:
+    """
+    Finds the threshold that maximises macro F0.5 using the full
+    precision-recall curve (O(n), exact — no grid search).
+    F0.5 = (1 + 0.25) * P * R / (0.25*P + R)
+    """
+    precision, recall, thresholds = precision_recall_curve(labels, probs)
+    beta = 0.5
+    beta2 = beta ** 2
+    denom = beta2 * precision + recall
+    f05 = np.where(denom > 0, (1 + beta2) * precision * recall / denom, 0.0)
+    best_idx = np.argmax(f05[:-1])  # last element has no threshold
+    best_thr = float(thresholds[best_idx])
+    best_f05 = float(f05[best_idx])
+    print(f"  PR-curve optimal threshold: {best_thr:.4f}  ->  F0.5={best_f05:.4f}  "
+          f"P={precision[best_idx]:.4f}  R={recall[best_idx]:.4f}")
+    return best_thr
+
+
 def main():
     data_dir = find_dataset_dir()
     out_dir = "output"
@@ -250,55 +271,170 @@ def main():
         print("Model not found at", model_path)
         sys.exit(1)
     clf = joblib.load(model_path)
-    # Load candidate universe (train S2+S3)
+
+    # ------------------------------------------------------------------ #
+    # Load ground-truth for calibration / threshold search                #
+    # ------------------------------------------------------------------ #
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                 "code", "business_entity_resolution", "src"))
+    gt_path = os.path.join(data_dir, "train", "train_ground_truth.tsv")
+    gt_df = pl.read_csv(gt_path, separator='\t')
+    gt_map: dict[str, set] = {
+        row[0]: set(row[1].split(',')) if row[1] else set()
+        for row in zip(gt_df['source1_entity_id'], gt_df['matched_entity_ids'])
+    }
+
+    # ------------------------------------------------------------------ #
+    # Load candidate universe (Source2 + Source3)                         #
+    # ------------------------------------------------------------------ #
     s2 = pl.read_csv(os.path.join(data_dir, "train", "train_source2.tsv"), separator='\t')
     s3 = pl.read_csv(os.path.join(data_dir, "train", "train_source3.tsv"), separator='\t')
     cand_raw = pl.concat([s2, s3])
     cand_df = preprocess_df(cand_raw)
+    del s2, s3, cand_raw
+
     blocker = CandidateBlocker(max_candidates_per_entity=30)
-    blocker.index_candidates(cand_df['entity_id'].to_list(), cand_df['country'].to_list(),
-                             cand_df['stripped_name'].to_list(), cand_df['pin'].to_list(), cand_df['metaphone'].to_list())
-    cand_dict = {eid: (sname, meta, caddr, pin, city, state) for eid, sname, meta, caddr, pin, city, state in zip(
-        cand_df['entity_id'].to_list(), cand_df['stripped_name'].to_list(), cand_df['metaphone'].to_list(),
-        cand_df['clean_addr'].to_list(), cand_df['pin'].to_list(), cand_df['city'].to_list(), cand_df['state'].to_list()
-    )}
+    blocker.index_candidates(
+        cand_df['entity_id'].to_list(), cand_df['country'].to_list(),
+        cand_df['stripped_name'].to_list(), cand_df['pin'].to_list(),
+        cand_df['metaphone'].to_list()
+    )
+    cand_dict = {
+        eid: (sname, meta, caddr, pin, city, state)
+        for eid, sname, meta, caddr, pin, city, state in zip(
+            cand_df['entity_id'].to_list(), cand_df['stripped_name'].to_list(),
+            cand_df['metaphone'].to_list(), cand_df['clean_addr'].to_list(),
+            cand_df['pin'].to_list(), cand_df['city'].to_list(), cand_df['state'].to_list()
+        )
+    }
     del cand_df; gc.collect()
-    # Load training S1
+
+    # ------------------------------------------------------------------ #
+    # Load Source1 and split into calibration (10%) + inference (90%)    #
+    # ------------------------------------------------------------------ #
     s1_raw = pl.read_csv(os.path.join(data_dir, "train", "train_source1.tsv"), separator='\t')
     ordered_ids = s1_raw['entity_id'].to_list()
     s1_df = preprocess_df(s1_raw)
     del s1_raw; gc.collect()
-    threshold = 0.85
-    matches = {sid: [] for sid in ordered_ids}
-    cand_lists = {}
-    batch_feat, batch_sids, batch_cids = [], [], []
-    for s1 in tqdm(s1_df.iter_rows(named=True), total=len(s1_df), desc="Training Inference"):
+
+    val_n = max(5000, int(len(ordered_ids) * 0.10))  # at least 5k for stable calibration
+    val_ids = set(ordered_ids[:val_n])
+    print(f"Calibration split: {len(val_ids):,} entities   Inference set: {len(ordered_ids)-len(val_ids):,} entities")
+
+    # ------------------------------------------------------------------ #
+    # PASS 1 – collect raw scores on validation split for calibration     #
+    # ------------------------------------------------------------------ #
+    print("\n[Pass 1/2] Collecting validation scores for isotonic calibration...")
+    val_probs_raw, val_labels = [], []
+    val_cand_lists = {}
+
+    for s1 in tqdm(s1_df.filter(pl.col('entity_id').is_in(list(val_ids))).iter_rows(named=True),
+                   total=len(val_ids), desc="Val Pass"):
         sid = s1['entity_id']
-        cands = blocker.find_candidates_for_entity(s1['country'], s1['stripped_name'], s1['pin'], s1['metaphone'])
+        cands = blocker.find_candidates_for_entity(
+            s1['country'], s1['stripped_name'], s1['pin'], s1['metaphone']
+        )
+        val_cand_lists[sid] = cands
+        feats = []
+        for cid in cands:
+            if cid in cand_dict:
+                c_name, c_meta, c_addr, c_pin, c_city, c_state = cand_dict[cid]
+                feats.append(compute_pairwise_features(
+                    s1['stripped_name'], s1['metaphone'], s1['clean_addr'], s1['pin'], s1['city'], s1['state'],
+                    cid, c_name, c_meta, c_addr, c_pin, c_city, c_state
+                ))
+        if feats:
+            probs = clf.predict_proba(np.array(feats, dtype=np.float32))[:, 1]
+            gt = gt_map.get(sid, set())
+            for cid, p in zip(cands, probs):
+                val_probs_raw.append(p)
+                val_labels.append(1 if cid in gt else 0)
+
+    val_probs_raw = np.array(val_probs_raw, dtype=np.float32)
+    val_labels    = np.array(val_labels,    dtype=np.int32)
+    print(f"  Val pairs: {len(val_probs_raw):,}  Positives: {val_labels.sum():,}  "
+          f"Positive rate: {val_labels.mean()*100:.2f}%")
+
+    # ------------------------------------------------------------------ #
+    # STEP 1 – Isotonic Regression Calibration                            #
+    # Fixes systematic over/under-confidence of the LightGBM scores.     #
+    # ------------------------------------------------------------------ #
+    print("\n[Calibration] Fitting isotonic regression...")
+    iso = IsotonicRegression(out_of_bounds='clip')
+    iso.fit(val_probs_raw, val_labels)
+    val_probs_cal = iso.transform(val_probs_raw)
+    print(f"  Raw  score mean: {val_probs_raw.mean():.4f}")
+    print(f"  Cal  score mean: {val_probs_cal.mean():.4f}   (positive rate: {val_labels.mean():.4f})")
+
+    # ------------------------------------------------------------------ #
+    # STEP 2 – F0.5-Optimal Threshold via Precision-Recall Curve (O(n))  #
+    # ------------------------------------------------------------------ #
+    print("\n[Threshold] Finding F0.5-optimal threshold from PR curve...")
+    best_thr = find_optimal_threshold_f05(val_probs_cal, val_labels)
+
+    # ------------------------------------------------------------------ #
+    # PASS 2 – Full inference with calibrated scores + optimal threshold  #
+    # ------------------------------------------------------------------ #
+    print(f"\n[Pass 2/2] Full inference (threshold={best_thr:.4f})...")
+    matches   = {sid: [] for sid in ordered_ids}
+    cand_lists = {**val_cand_lists}  # reuse already-computed val candidates
+
+    # Apply threshold to validation predictions first
+    for s1 in s1_df.filter(pl.col('entity_id').is_in(list(val_ids))).iter_rows(named=True):
+        sid = s1['entity_id']
+        cands = val_cand_lists.get(sid, [])
+        feats = []
+        for cid in cands:
+            if cid in cand_dict:
+                c_name, c_meta, c_addr, c_pin, c_city, c_state = cand_dict[cid]
+                feats.append(compute_pairwise_features(
+                    s1['stripped_name'], s1['metaphone'], s1['clean_addr'], s1['pin'], s1['city'], s1['state'],
+                    cid, c_name, c_meta, c_addr, c_pin, c_city, c_state
+                ))
+        if feats:
+            raw_p  = clf.predict_proba(np.array(feats, dtype=np.float32))[:, 1]
+            cal_p  = iso.transform(raw_p)
+            for cid, p in zip(cands, cal_p):
+                if p >= best_thr:
+                    matches[sid].append(cid)
+
+    # Inference on remaining 90%
+    batch_feat, batch_sids, batch_cids = [], [], []
+    non_val_df = s1_df.filter(~pl.col('entity_id').is_in(list(val_ids)))
+    for s1 in tqdm(non_val_df.iter_rows(named=True), total=len(non_val_df), desc="Full Inference"):
+        sid = s1['entity_id']
+        cands = blocker.find_candidates_for_entity(
+            s1['country'], s1['stripped_name'], s1['pin'], s1['metaphone']
+        )
         cand_lists[sid] = cands
         for cid in cands:
             if cid in cand_dict:
                 c_name, c_meta, c_addr, c_pin, c_city, c_state = cand_dict[cid]
-                feat = compute_pairwise_features(
+                batch_feat.append(compute_pairwise_features(
                     s1['stripped_name'], s1['metaphone'], s1['clean_addr'], s1['pin'], s1['city'], s1['state'],
                     cid, c_name, c_meta, c_addr, c_pin, c_city, c_state
-                )
-                batch_feat.append(feat)
+                ))
                 batch_sids.append(sid)
                 batch_cids.append(cid)
         if len(batch_feat) >= 60000:
-            probs = clf.predict_proba(np.array(batch_feat, dtype=np.float32))[:,1]
-            for sid, cid, p in zip(batch_sids, batch_cids, probs):
-                if p >= threshold:
-                    matches[sid].append(cid)
+            raw_p = clf.predict_proba(np.array(batch_feat, dtype=np.float32))[:, 1]
+            cal_p = iso.transform(raw_p)
+            for s, c, p in zip(batch_sids, batch_cids, cal_p):
+                if p >= best_thr:
+                    matches[s].append(c)
             batch_feat, batch_sids, batch_cids = [], [], []
+
     if batch_feat:
-        probs = clf.predict_proba(np.array(batch_feat, dtype=np.float32))[:,1]
-        for sid, cid, p in zip(batch_sids, batch_cids, probs):
-            if p >= threshold:
-                matches[sid].append(cid)
-    # Write outputs preserving order
-    cand_path = os.path.join(out_dir, "candidate_pairs_train.tsv")
+        raw_p = clf.predict_proba(np.array(batch_feat, dtype=np.float32))[:, 1]
+        cal_p = iso.transform(raw_p)
+        for s, c, p in zip(batch_sids, batch_cids, cal_p):
+            if p >= best_thr:
+                matches[s].append(c)
+
+    # ------------------------------------------------------------------ #
+    # Write outputs preserving original Source1 order                     #
+    # ------------------------------------------------------------------ #
+    cand_path  = os.path.join(out_dir, "candidate_pairs_train.tsv")
     match_path = os.path.join(out_dir, "matching_results_train.tsv")
     with open(cand_path, 'w', encoding='utf-8') as f:
         f.write("source1_entity_id\tcandidate_entity_ids\n")
@@ -308,9 +444,30 @@ def main():
         f.write("source1_entity_id\tmatched_entity_ids\n")
         for sid in ordered_ids:
             f.write(f"{sid}\t{','.join(matches.get(sid, []))}\n")
-    print("Inference complete. Files written:")
-    print(cand_path)
-    print(match_path)
+
+    total_matches = sum(len(v) for v in matches.values())
+    print(f"\nInference complete.")
+    print(f"  Optimal threshold (calibrated): {best_thr:.4f}")
+    print(f"  Total matched pairs: {total_matches:,}")
+    print(f"  Outputs: {cand_path}")
+    print(f"           {match_path}")
+
+    # ------------------------------------------------------------------ #
+    # Final evaluation against ground truth                              #
+    # ------------------------------------------------------------------ #
+    try:
+        from evaluate import evaluate_predictions
+        preds = {sid: matches[sid] for sid in ordered_ids}
+        metrics = evaluate_predictions(preds, gt_map)
+        print(f"\n{'='*50}")
+        print(f"  FINAL EVALUATION (full training set, {len(ordered_ids):,} entities)")
+        print(f"  Macro F0.5    : {metrics['macro_f05']:.4f}")
+        print(f"  Macro Precision: {metrics['macro_precision']:.4f}")
+        print(f"  Macro Recall  : {metrics['macro_recall']:.4f}")
+        print(f"{'='*50}")
+    except Exception as e:
+        print(f"Evaluation skipped: {e}")
+
 
 if __name__ == "__main__":
     main()
