@@ -81,8 +81,9 @@ cand_dict = {r['entity_id']: r for r in cand_df.iter_rows(named=True)}
 print(f"Indexing {len(cand_df):,} candidate records into blocker...")
 blocker = ProductionCandidateBlocker(
     max_candidates_per_entity=30,
-    device='cpu',  # Local CPU for benchmark
-    use_gpu_faiss=False
+    device='cuda' if os.environ.get('CUDA_VISIBLE_DEVICES') or __import__('subprocess').run(['nvidia-smi'], capture_output=True).returncode == 0 else 'cpu',
+    use_gpu_faiss=os.environ.get('CUDA_VISIBLE_DEVICES') is not None or __import__('subprocess').run(['nvidia-smi'], capture_output=True).returncode == 0
+
 )
 blocker.index_candidates(
     cand_df['entity_id'].to_list(), cand_df['country'].to_list(),
